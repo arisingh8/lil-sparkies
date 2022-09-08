@@ -14,9 +14,15 @@ ARG INSTALL_RUST_TOOLCHAIN=install-rust-toolchain.sh
 
 # Install dependencies
 RUN apt-get update \
-    && apt-get install -y git curl gcc clang ninja-build libudev-dev unzip xz-utils\
-    python3 python3-pip python3-venv libusb-1.0-0 libssl-dev pkg-config libtinfo5 libpython2.7 \
+    && apt-get install -y git curl gcc clang ninja-build libudev-dev unzip xz-utils udev hwdata usbip \
+    python3 python3-pip python3-venv libusb-1.0-0 libssl-dev pkg-config libtinfo5 libpython2.7 usbutils \
     && apt-get clean -y && rm -rf /var/lib/apt/lists/* /tmp/library-scripts
+
+# RUN update-alternatives --install /usr/local/bin/usbip usbip /usr/lib/linux-tools/virtual/usbip 20
+
+RUN echo 'ACTION=="add", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", KERNEL=="ttyUSB0", MODE="0777"' >> /etc/udev/rules.d/50-esp.rules
+RUN chown root:root /etc/udev/rules.d/50-esp.rules
+RUN chmod 0644 /etc/udev/rules.d/50-esp.rules
 
 # Set users
 RUN adduser --disabled-password --gecos "" ${CONTAINER_USER}

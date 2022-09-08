@@ -41,5 +41,6 @@
     8000
   ],
   "workspaceMount": "source=${localWorkspaceFolder},target=/home/esp/lil_sparkies,type=bind,consistency=cached",
-  "workspaceFolder": "/home/esp/lil_sparkies"
+  "workspaceFolder": "/home/esp/lil_sparkies",
+	"runArgs": ["--privileged", "--device=/dev/ttyUSB0"]
 }
