@@ -15,7 +15,7 @@ ARG INSTALL_RUST_TOOLCHAIN=install-rust-toolchain.sh
 # Install dependencies
 RUN apt-get update \
     && apt-get install -y git curl gcc clang ninja-build libudev-dev unzip xz-utils udev hwdata usbip \
-    python3 python3-pip python3-venv libusb-1.0-0 libssl-dev pkg-config libtinfo5 libpython2.7 usbutils \
+    python3 python3-pip python3-venv libusb-1.0-0 libssl-dev pkg-config libtinfo5 libpython2.7 usbutils apt-file \
     && apt-get clean -y && rm -rf /var/lib/apt/lists/* /tmp/library-scripts
 
 # RUN update-alternatives --install /usr/local/bin/usbip usbip /usr/lib/linux-tools/virtual/usbip 20

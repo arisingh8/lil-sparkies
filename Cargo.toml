@@ -5,6 +5,15 @@ authors = ["Ari Singh <arisingh8@gmail.com>"]
 edition = "2021"
 resolver = "2"
 
+[package.metadata.espflash]
+partition_table = "partitions.csv"
+
+[patch.crates-io]
+smol = { git = "https://github.com/esp-rs-compat/smol" }
+polling = { git = "https://github.com/esp-rs-compat/polling" }
+socket2 = { git = "https://github.com/esp-rs-compat/socket2" }
+getrandom = { version = "0.2", git = "https://github.com/esp-rs-compat/getrandom.git" }
+
 [profile.release]
 opt-level = "s"
 
@@ -13,12 +22,25 @@ debug = true # Symbols are nice and they don't increase the size on Flash
 opt-level = "z"
 
 [features]
+default = ["experimental"]
 pio = ["esp-idf-sys/pio"]
 
-[dependencies]
-esp-idf-sys = { version = "0.31.6", features = ["binstart"] }
+experimental = ["esp-idf-svc/experimental", "esp-idf-hal/experimental", "embedded-svc/experimental"]
 
+[dependencies]
+anyhow = {version = "1", features = ["backtrace"]}
+log = "0.4"
+url = "2"
+smol = "1.2.5"
+esp-idf-sys = { version = "0.31.6", features = ["binstart"] }
+esp-idf-svc = "0.42.1"
+esp-idf-hal = "0.38"
+embedded-svc = "0.22"
+embedded-hal = "0.2"
+async-tungstenite = { version = "0.17"}
+tungstenite = "0.17"
+futures = "0.3"
 
 [build-dependencies]
-embuild = "0.29"
+embuild = "0.30.3"
 anyhow = "1"
