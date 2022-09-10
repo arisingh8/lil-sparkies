@@ -63,6 +63,8 @@ fn main() -> Result<()> {
         default_nvs.clone(),
     )?;
 
+    test_tcp_bind();
+
     loop {
         thread::sleep(Duration::from_secs(1));
     }
@@ -71,10 +73,10 @@ fn main() -> Result<()> {
 }
 
 fn wifi(
-    netif_stack: Arc<EspNetifStack>,
-    sys_loop_stack: Arc<EspSysLoopStack>,
-    default_nvs: Arc<EspDefaultNvs>,
-) -> Result<Box<EspWifi>> {
+        netif_stack: Arc<EspNetifStack>,
+        sys_loop_stack: Arc<EspSysLoopStack>,
+        default_nvs: Arc<EspDefaultNvs>,
+    ) -> Result<Box<EspWifi>> {
     let mut wifi = Box::new(EspWifi::new(netif_stack, sys_loop_stack, default_nvs)?);
 
     info!("Wifi created, about to setup AP");
@@ -105,16 +107,15 @@ fn wifi(
 
 fn test_tcp_bind() -> Result<()> {
     fn test_tcp_bind_accept() -> Result<()> {
-        info!("About to bind a simple echo service to port 8080");
+        info!("About to bind a WebSocket to port 9000");
 
-        let listener = TcpListener::bind("0.0.0.0:8080")?;
-        let host = format!("wss://{}", listener.local_addr()?);
+        let listener = TcpListener::bind("0.0.0.0:9000")?;
 
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
                     info!("Accepted client: {}", stream.peer_addr()?);
-                    let stream = WsStream::Plain(tungstenite::accept(stream).await?);
+                    let stream = tungstenite::accept(stream);
 
                     thread::spawn(move || {
                         test_tcp_bind_handle_client(stream);
@@ -129,19 +130,18 @@ fn test_tcp_bind() -> Result<()> {
         unreachable!()
     }
 
-    fn test_tcp_bind_handle_client(mut stream: WsStream) {
-        // read 20 bytes at a time from stream echoing back to stream
+    fn test_tcp_bind_handle_client(mut stream: WebSocket) {
         loop {
-            match stream.next() {
+            match stream.read_message() {
                 Ok(n) => {
-                    if n.into_text().unwrap().len() == 0 {
-                        // connection was closed
-                        break;
-                    }
-                    stream.write_all(&read[0..n]).unwrap();
+                    stream.write_message(n).unwrap();
                 }
                 Err(err) => {
-                    panic!("{}", err);
+                    if Error::ConnectionClosed == err {
+                        break;
+                    } else {
+                        panic!("{}", err);
+                    }
                 }
             }
         }
@@ -150,56 +150,4 @@ fn test_tcp_bind() -> Result<()> {
     thread::spawn(|| test_tcp_bind_accept().unwrap());
 
     Ok(())
-}
-
-/// A WebSocket or WebSocket+TLS connection.
-enum WsStream {
-    /// A plain WebSocket connection.
-    Plain(WebSocketStream<TcpStream>),
-
-    // A WebSocket connection secured by TLS.
-    // Tls(WebSocketStream<TlsStream<Async<TcpStream>>>),
-}
-
-impl Sink<Message> for WsStream {
-    type Error = tungstenite::Error;
-
-    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match &mut *self {
-            WsStream::Plain(s) => Pin::new(s).poll_ready(cx),
-            //WsStream::Tls(s) => Pin::new(s).poll_ready(cx),
-        }
-    }
-
-    fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
-        match &mut *self {
-            WsStream::Plain(s) => Pin::new(s).start_send(item),
-            //WsStream::Tls(s) => Pin::new(s).start_send(item),
-        }
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match &mut *self {
-            WsStream::Plain(s) => Pin::new(s).poll_flush(cx),
-            //WsStream::Tls(s) => Pin::new(s).poll_flush(cx),
-        }
-    }
-
-    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        match &mut *self {
-            WsStream::Plain(s) => Pin::new(s).poll_close(cx),
-            //WsStream::Tls(s) => Pin::new(s).poll_close(cx),
-        }
-    }
-}
-
-impl Stream for WsStream {
-    type Item = tungstenite::Result<Message>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match &mut *self {
-            WsStream::Plain(s) => Pin::new(s).poll_next(cx),
-            //WsStream::Tls(s) => Pin::new(s).poll_next(cx),
-        }
-    }
 }
