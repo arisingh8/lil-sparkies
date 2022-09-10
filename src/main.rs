@@ -1,21 +1,18 @@
 #[allow(unused_imports)]
 use std::fs;
-use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use std::path::PathBuf;
-use std::sync::{Condvar, Mutex};
-use std::{cell::RefCell, env, sync::atomic::*, sync::Arc, thread, time::*};
+use std::{sync::Arc, thread, time::*};
 
 use anyhow::{Context as _, Result, bail};
 
 use log::*;
 
-use async_tungstenite::WebSocketStream;
 use futures::sink::{Sink, SinkExt};
-use smol::{future, prelude::*, Async};
+use smol::{prelude::*, Async};
 use tungstenite::Message;
+use async_tungstenite::WebSocketStream;
 
 use embedded_hal::digital::v2::OutputPin;
 
@@ -27,9 +24,6 @@ use esp_idf_svc::sysloop::*;
 use esp_idf_svc::wifi::*;
 
 use esp_idf_hal::prelude::*;
-
-use esp_idf_sys::{self, c_types};
-use esp_idf_sys::{esp, EspError};
 
 fn main() -> Result<()> {
     // Temporary. Will disappear once ESP-IDF 4.4 is released, but for now it is necessary to call this function once,
@@ -57,13 +51,14 @@ fn main() -> Result<()> {
     let mut onboard_led = pins.gpio2.into_output()?;
     onboard_led.set_high()?;
 
-    let mut wifi = wifi(
+    #[allow(unused)]
+    let wifi = wifi(
         netif_stack.clone(),
         sys_loop_stack.clone(),
         default_nvs.clone(),
     )?;
 
-    test_tcp_bind();
+    test_tcp_bind()?;
 
     loop {
         thread::sleep(Duration::from_secs(1));
@@ -105,49 +100,98 @@ fn wifi(
     Ok(wifi)
 }
 
-fn test_tcp_bind() -> Result<()> {
-    fn test_tcp_bind_accept() -> Result<()> {
-        info!("About to bind a WebSocket to port 9000");
-
-        let listener = TcpListener::bind("0.0.0.0:9000")?;
-
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    info!("Accepted client: {}", stream.peer_addr()?);
-                    let stream = tungstenite::accept(stream);
-
-                    thread::spawn(move || {
-                        test_tcp_bind_handle_client(stream);
-                    });
-                }
-                Err(e) => {
-                    error!("Error: {}", e);
-                }
-            }
+fn test_tcp_bind() -> anyhow::Result<()> {
+    async fn test_tcp_bind() -> anyhow::Result<()> {
+        /// Echoes messages from the client back to it.
+        async fn echo(mut stream: WsStream) -> anyhow::Result<()> {
+            let msg = stream.next().await.context("expected a message")??;
+            stream.send(Message::text(msg.to_string())).await?;
+            Ok(())
         }
 
-        unreachable!()
-    }
+        // Create a listener.
+        let listener = smol::Async::<TcpListener>::bind(([0, 0, 0, 0], 8081))?;
 
-    fn test_tcp_bind_handle_client(mut stream: WebSocket) {
+        // Accept clients in a loop.
         loop {
-            match stream.read_message() {
-                Ok(n) => {
-                    stream.write_message(n).unwrap();
-                }
-                Err(err) => {
-                    if Error::ConnectionClosed == err {
-                        break;
-                    } else {
-                        panic!("{}", err);
-                    }
-                }
-            }
+            let (stream, peer_addr) = listener.accept().await?;
+            info!("Accepted client: {}", peer_addr);
+
+            // create the async WebSocketStream
+            let stream = WsStream::Plain(async_tungstenite::accept_async(stream).await?);
+
+            // Spawn a task that echoes messages from the client back to it.
+            smol::spawn(echo(stream)).detach();
         }
     }
 
-    thread::spawn(|| test_tcp_bind_accept().unwrap());
+    info!("About to bind a simple echo service to port 8081 using async (smol-rs)!");
+
+    #[allow(clippy::needless_update)]
+    {
+        esp_idf_sys::esp!(unsafe {
+            esp_idf_sys::esp_vfs_eventfd_register(&esp_idf_sys::esp_vfs_eventfd_config_t {
+                max_fds: 5,
+                ..Default::default()
+            })
+        })?;
+    }
+
+    thread::Builder::new().stack_size(8192).spawn(move || {
+        smol::block_on(test_tcp_bind()).unwrap();
+    })?;
 
     Ok(())
+}
+
+/// A WebSocket or WebSocket+TLS connection.
+enum WsStream {
+    /// A plain WebSocket connection.
+    Plain(WebSocketStream<Async<TcpStream>>),
+
+    // A WebSocket connection secured by TLS.
+    // Tls(WebSocketStream<TlsStream<Async<TcpStream>>>),
+}
+
+impl Sink<Message> for WsStream {
+    type Error = tungstenite::Error;
+
+    fn poll_ready(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        match &mut *self {
+            WsStream::Plain(s) => Pin::new(s).poll_ready(cx),
+            //WsStream::Tls(s) => Pin::new(s).poll_ready(cx),
+        }
+    }
+
+    fn start_send(mut self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
+        match &mut *self {
+            WsStream::Plain(s) => Pin::new(s).start_send(item),
+            //WsStream::Tls(s) => Pin::new(s).start_send(item),
+        }
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        match &mut *self {
+            WsStream::Plain(s) => Pin::new(s).poll_flush(cx),
+            //WsStream::Tls(s) => Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        match &mut *self {
+            WsStream::Plain(s) => Pin::new(s).poll_close(cx),
+            //WsStream::Tls(s) => Pin::new(s).poll_close(cx),
+        }
+    }
+}
+
+impl Stream for WsStream {
+    type Item = tungstenite::Result<Message>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match &mut *self {
+            WsStream::Plain(s) => Pin::new(s).poll_next(cx),
+            //WsStream::Tls(s) => Pin::new(s).poll_next(cx),
+        }
+    }
 }
