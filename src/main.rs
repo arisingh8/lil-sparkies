@@ -51,28 +51,8 @@ fn main() -> Result<()> {
     let mut onboard_led = pins.gpio2.into_output()?;
     onboard_led.set_high()?;
 
-    #[allow(unused)]
-    let wifi = wifi(
-        netif_stack.clone(),
-        sys_loop_stack.clone(),
-        default_nvs.clone(),
-    )?;
-
-    test_tcp_bind()?;
-
-    loop {
-        thread::sleep(Duration::from_secs(1));
-    }
-
-    Ok(())
-}
-
-fn wifi(
-        netif_stack: Arc<EspNetifStack>,
-        sys_loop_stack: Arc<EspSysLoopStack>,
-        default_nvs: Arc<EspDefaultNvs>,
-    ) -> Result<Box<EspWifi>> {
-    let mut wifi = Box::new(EspWifi::new(netif_stack, sys_loop_stack, default_nvs)?);
+    #[allow(clippy::redundant_clone)]
+    let mut wifi = Box::new(EspWifi::new(netif_stack.clone(), sys_loop_stack.clone(), default_nvs.clone())?);
 
     info!("Wifi created, about to setup AP");
 
@@ -97,34 +77,6 @@ fn wifi(
         bail!("Unexpected Wifi status: {:?}", status);
     }
 
-    Ok(wifi)
-}
-
-fn test_tcp_bind() -> anyhow::Result<()> {
-    async fn test_tcp_bind() -> anyhow::Result<()> {
-        /// Echoes messages from the client back to it.
-        async fn echo(mut stream: WsStream) -> anyhow::Result<()> {
-            let msg = stream.next().await.context("expected a message")??;
-            stream.send(Message::text(msg.to_string())).await?;
-            Ok(())
-        }
-
-        // Create a listener.
-        let listener = smol::Async::<TcpListener>::bind(([0, 0, 0, 0], 8081))?;
-
-        // Accept clients in a loop.
-        loop {
-            let (stream, peer_addr) = listener.accept().await?;
-            info!("Accepted client: {}", peer_addr);
-
-            // create the async WebSocketStream
-            let stream = WsStream::Plain(async_tungstenite::accept_async(stream).await?);
-
-            // Spawn a task that echoes messages from the client back to it.
-            smol::spawn(echo(stream)).detach();
-        }
-    }
-
     info!("About to bind a simple echo service to port 8081 using async (smol-rs)!");
 
     #[allow(clippy::needless_update)]
@@ -137,11 +89,37 @@ fn test_tcp_bind() -> anyhow::Result<()> {
         })?;
     }
 
-    thread::Builder::new().stack_size(8192).spawn(move || {
-        smol::block_on(test_tcp_bind()).unwrap();
+    let ws_handle = thread::Builder::new().stack_size(8192).spawn(|| {
+        smol::block_on(ws_bind()).unwrap();
     })?;
 
+    ws_handle.join().unwrap();
+
     Ok(())
+}
+
+async fn ws_bind() -> anyhow::Result<()> {
+    /// Echoes messages from the client back to it.
+    async fn echo(mut stream: WsStream) -> anyhow::Result<()> {
+        let msg = stream.next().await.context("expected a message")??;
+        stream.send(Message::text(msg.to_string())).await?;
+        Ok(())
+    }
+
+    // Create a listener.
+    let listener = smol::Async::<TcpListener>::bind(([0, 0, 0, 0], 8081))?;
+
+    // Accept clients in a loop.
+    loop {
+        let (stream, peer_addr) = listener.accept().await?;
+        info!("Accepted client: {}", peer_addr);
+
+        // create the async WebSocketStream
+        let stream = WsStream::Plain(async_tungstenite::accept_async(stream).await?);
+
+        // Spawn a task that echoes messages from the client back to it.
+        smol::spawn(echo(stream)).detach();
+    }
 }
 
 /// A WebSocket or WebSocket+TLS connection.
